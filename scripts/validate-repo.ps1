@@ -19,7 +19,8 @@ $required = @(
   "examples/express-paid-api/.env.example",
   "examples/express-paid-api/src/server.ts",
   "examples/express-paid-api/src/payments.ts",
-  "examples/express-paid-api/test/payment-contract.test.ts"
+  "examples/express-paid-api/test/payment-contract.test.ts",
+  "examples/express-paid-api/test/onchain-payment.e2e.test.ts"
 )
 foreach ($file in $required) {
   $path = Join-Path $root $file
