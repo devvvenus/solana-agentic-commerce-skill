@@ -71,6 +71,24 @@ For Solana AI Kit integration, the useful unit is the `SKILL.md`, `references/`,
 
 Bounty submission candidate. Templates use the released `@solana/mpp/server` and `mppx/express` surfaces, require server-side payment configuration before a paid route can start, and fail closed when required payment configuration is missing.
 
+## Judge / Reviewer Quickstart
+
+This repository includes a runnable Pay Kit / MPP Express example and a real local settlement E2E test. The payment test uses real local settlement: it starts from generated payer and recipient keypairs, pays through `@solana/mpp/client`, parses `Payment-Receipt`, fetches the transaction by receipt reference, and verifies the recipient balance delta.
+
+```bash
+npm --prefix examples/express-paid-api install
+npm run verify
+```
+
+For the full on-chain E2E, start Surfpool in another terminal and run:
+
+```bash
+surfpool start --ci --offline --airdrop-amount 0
+npm run example:e2e
+```
+
+The GitHub Actions workflow also contains a pinned Surfpool `v1.3.1` E2E job. If Actions are disabled at the GitHub account level, use the local commands above as the verification path.
+
 ## Working example
 
 The `examples/express-paid-api` app is the runnable reference path for this skill. It gates `/api/v1/agent-report` with the current TypeScript Pay Kit package:
