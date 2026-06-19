@@ -5,7 +5,8 @@
     "type": "module",
     "scripts": {
         "typecheck": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run --exclude test/onchain-payment.e2e.test.ts",
+        "test:e2e": "vitest run test/onchain-payment.e2e.test.ts --testTimeout=120000"
     },
     "dependencies": {
         "@solana/mpp": "^0.6.0",
@@ -13,6 +14,7 @@
         "mppx": "^0.7.0"
     },
     "devDependencies": {
+        "@solana/kit": "^6.5.0",
         "@types/express": "^5.0.0",
         "@types/node": "^20.14.12",
         "typescript": "^5.5.4",

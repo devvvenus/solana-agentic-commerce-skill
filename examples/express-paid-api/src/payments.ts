@@ -9,7 +9,7 @@ export function createPaymentMiddleware(contract: PaymentContract) {
     methods: [
       solana.charge({
         recipient: contract.recipient,
-        currency: contract.currencyMint,
+        currency: contract.currency,
         decimals: contract.decimals,
         network: contract.network,
         rpcUrl: contract.rpcUrl,

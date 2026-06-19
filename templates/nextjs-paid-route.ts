@@ -2,8 +2,8 @@ import { Mppx, solana } from "@solana/mpp/server";
 
 type PaymentRouteConfig = {
   amountBaseUnits: string;
-  currencyMint: string;
-  decimals: number;
+  currency: string;
+  decimals?: number;
   description: string;
   recipient: string;
   network: "localnet" | "devnet" | "mainnet-beta";
@@ -12,10 +12,12 @@ type PaymentRouteConfig = {
   realm: string;
 };
 
+const currency = requiredPaymentCurrency();
+
 const config: PaymentRouteConfig = {
   amountBaseUnits: requiredPositiveIntegerEnv("PAID_ROUTE_AMOUNT_BASE_UNITS"),
-  currencyMint: requiredEnv("PAID_ROUTE_CURRENCY_MINT"),
-  decimals: requiredIntegerEnv("PAID_ROUTE_DECIMALS"),
+  currency,
+  decimals: currency === "sol" ? undefined : requiredIntegerEnv("PAID_ROUTE_DECIMALS"),
   description: process.env.PAID_ROUTE_DESCRIPTION ?? "Paid agentic commerce endpoint",
   recipient: requiredEnv("SOLANA_PAYMENT_RECIPIENT"),
   network: paymentNetwork(process.env.SOLANA_PAYMENT_NETWORK ?? "localnet"),
@@ -30,7 +32,7 @@ const mppx = Mppx.create({
   methods: [
     solana.charge({
       recipient: config.recipient,
-      currency: config.currencyMint,
+      currency: config.currency,
       decimals: config.decimals,
       network: config.network,
       rpcUrl: config.rpcUrl,
@@ -53,6 +55,12 @@ export async function GET(request: Request) {
       settlement: "verified-by-solana-mpp",
     }),
   );
+}
+
+function requiredPaymentCurrency() {
+  const value = process.env.PAID_ROUTE_CURRENCY ?? process.env.PAID_ROUTE_CURRENCY_MINT;
+  if (!value) throw new Error("Missing required env var: PAID_ROUTE_CURRENCY");
+  return value;
 }
 
 function requiredEnv(name: string) {

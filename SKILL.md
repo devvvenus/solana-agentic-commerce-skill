@@ -30,7 +30,7 @@ This is not an SDK-porting skill. It is a builder workflow skill for applying Pa
    - Use MPP-style intent when you need splits, platform fees, fee-payer separation, gasless UX, or richer settlement rules.
 3. Define the payment contract before code:
    - method and path
-   - price, token, recipient
+   - price, currency (`sol` or SPL mint), decimals for SPL tokens, recipient
    - network and confirmation level
    - nonce/reference lifetime
    - replay policy
@@ -42,7 +42,7 @@ This is not an SDK-porting skill. It is a builder workflow skill for applying Pa
 
 ## Required Safety Checks
 
-Every paid route must show or log the exact recipient, token, amount, network, and product being purchased before payment is signed. Every server must bind payment proof to the original request intent, reject stale nonces, and prevent proof reuse across routes or users.
+Every paid route must show or log the exact recipient, currency, amount, network, and product being purchased before payment is signed. Every server must bind payment proof to the original request intent, reject stale nonces, and prevent proof reuse across routes or users.
 
 Never tell the user that a route is production-ready until it has:
 

@@ -1,10 +1,11 @@
 import { solana } from "@solana/mpp/server";
 import { Mppx } from "mppx/express";
 
+// currency is "sol" for native SOL, or an SPL token mint address.
 type PaidRouteOptions = {
   amountBaseUnits: string;
-  currencyMint: string;
-  decimals: number;
+  currency: string;
+  decimals?: number;
   description: string;
   recipient: string;
   network: "localnet" | "devnet" | "mainnet-beta";
@@ -15,7 +16,7 @@ type PaidRouteOptions = {
 
 export function requireSolanaPayment(options: PaidRouteOptions) {
   requirePositiveBaseUnits(options.amountBaseUnits);
-  requireTokenDecimals(options.decimals);
+  if (options.currency !== "sol") requireTokenDecimals(options.decimals);
 
   const mppx = Mppx.create({
     secretKey: options.secretKey,
@@ -23,7 +24,7 @@ export function requireSolanaPayment(options: PaidRouteOptions) {
     methods: [
       solana.charge({
         recipient: options.recipient,
-        currency: options.currencyMint,
+        currency: options.currency,
         decimals: options.decimals,
         network: options.network,
         rpcUrl: options.rpcUrl,
@@ -43,8 +44,8 @@ function requirePositiveBaseUnits(value: string) {
   }
 }
 
-function requireTokenDecimals(value: number) {
+function requireTokenDecimals(value: number | undefined) {
   if (!Number.isInteger(value) || value < 0 || value > 18) {
-    throw new Error("decimals must be an integer from 0 through 18");
+    throw new Error("decimals must be an integer from 0 through 18 for SPL token payments");
   }
 }

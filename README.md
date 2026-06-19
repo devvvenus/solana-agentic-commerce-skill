@@ -88,15 +88,21 @@ npm --prefix examples/express-paid-api run typecheck
 npm --prefix examples/express-paid-api test
 ```
 
+Run the full local settlement E2E with Surfpool running on `127.0.0.1:8899`:
+
+```bash
+surfpool start --ci --offline --airdrop-amount 0
+npm --prefix examples/express-paid-api run test:e2e
+```
+
 Required server env vars:
 
 ```text
-PAID_ROUTE_AMOUNT_BASE_UNITS=1000
-PAID_ROUTE_CURRENCY_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-PAID_ROUTE_DECIMALS=6
+PAID_ROUTE_AMOUNT_BASE_UNITS=25000
+PAID_ROUTE_CURRENCY=sol
 SOLANA_PAYMENT_RECIPIENT=<recipient-wallet>
-SOLANA_RPC_URL=https://402.surfnet.dev:8899
+SOLANA_RPC_URL=http://127.0.0.1:8899
 MPP_SECRET_KEY=<server-secret>
 ```
 
-`PAID_ROUTE_AMOUNT_BASE_UNITS` is always an integer. With a six-decimal token, `1000` equals `0.001` token. The example's integration test starts a real Express server and confirms that an unpaid request receives the SDK's actual `402 Payment Required` challenge; it never bypasses settlement verification.
+`PAID_ROUTE_AMOUNT_BASE_UNITS` is always an integer. `PAID_ROUTE_CURRENCY=sol` uses lamports. For SPL tokens, set `PAID_ROUTE_CURRENCY` to the mint address and provide `PAID_ROUTE_DECIMALS`; the older `PAID_ROUTE_CURRENCY_MINT` env var is still accepted for compatibility. The example keeps unpaid 402 coverage in the default test suite and adds a real Surfpool E2E that funds generated keypairs, pays the route through `@solana/mpp/client`, parses `Payment-Receipt`, fetches the transaction by receipt reference, and verifies the recipient balance increased by the charged lamports.

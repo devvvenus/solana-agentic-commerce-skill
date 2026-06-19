@@ -2,8 +2,8 @@ export type PaymentNetwork = "localnet" | "devnet" | "mainnet-beta";
 
 export type PaymentContract = {
   amountBaseUnits: string;
-  currencyMint: string;
-  decimals: number;
+  currency: string;
+  decimals?: number;
   description: string;
   recipient: string;
   network: PaymentNetwork;
@@ -18,10 +18,12 @@ export function readPaymentContract(env: NodeJS.ProcessEnv): PaymentContract {
     throw new Error("PAID_ROUTE_AMOUNT_BASE_UNITS must be a positive integer");
   }
 
-  const decimals = Number(required(env, "PAID_ROUTE_DECIMALS"));
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
-    throw new Error("PAID_ROUTE_DECIMALS must be an integer from 0 through 18");
+  const currency = env.PAID_ROUTE_CURRENCY ?? env.PAID_ROUTE_CURRENCY_MINT;
+  if (!currency) {
+    throw new Error("Missing required environment variable: PAID_ROUTE_CURRENCY");
   }
+
+  const decimals = currency === "sol" ? undefined : readDecimals(env);
 
   const network = env.SOLANA_PAYMENT_NETWORK ?? "localnet";
   if (!isPaymentNetwork(network)) {
@@ -30,7 +32,7 @@ export function readPaymentContract(env: NodeJS.ProcessEnv): PaymentContract {
 
   return {
     amountBaseUnits,
-    currencyMint: required(env, "PAID_ROUTE_CURRENCY_MINT"),
+    currency,
     decimals,
     description: env.PAID_ROUTE_DESCRIPTION ?? "Paid agentic commerce endpoint",
     recipient: required(env, "SOLANA_PAYMENT_RECIPIENT"),
@@ -39,6 +41,14 @@ export function readPaymentContract(env: NodeJS.ProcessEnv): PaymentContract {
     secretKey: required(env, "MPP_SECRET_KEY"),
     realm: env.MPP_REALM ?? "Solana Agentic Commerce",
   };
+}
+
+function readDecimals(env: NodeJS.ProcessEnv): number {
+  const decimals = Number(required(env, "PAID_ROUTE_DECIMALS"));
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+    throw new Error("PAID_ROUTE_DECIMALS must be an integer from 0 through 18");
+  }
+  return decimals;
 }
 
 function isPaymentNetwork(value: string): value is PaymentNetwork {

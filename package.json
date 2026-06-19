@@ -8,7 +8,8 @@
     "validate": "powershell -ExecutionPolicy Bypass -File scripts/validate-repo.ps1",
     "example:install": "npm --prefix examples/express-paid-api install",
     "example:typecheck": "npm --prefix examples/express-paid-api run typecheck",
-    "example:test": "npm --prefix examples/express-paid-api test"
+    "example:test": "npm --prefix examples/express-paid-api test",
+    "example:e2e": "npm --prefix examples/express-paid-api run test:e2e"
   },
   "keywords": [
     "solana",
