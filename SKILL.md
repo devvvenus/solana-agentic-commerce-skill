@@ -55,7 +55,7 @@ Never tell the user that a route is production-ready until it has:
 
 ## Templates
 
-Use templates as integration skeletons. They must fail closed until the current Pay Kit SDK or official verifier is wired.
+Use templates as integration skeletons. For TypeScript backends, prefer `@solana/mpp/server` with `Mppx.create({ methods: [solana.charge(...)] })` so settlement verification stays inside the published Pay Kit middleware surface. Express integrations also use the official `mppx/express` adapter.
 
 - `templates/nextjs-paid-route.ts`: Next.js App Router paid endpoint shape.
 - `templates/express-paid-middleware.ts`: Express middleware shape for existing APIs.

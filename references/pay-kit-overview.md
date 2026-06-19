@@ -36,3 +36,31 @@ The server protects a resource. An unpaid request receives `402 Payment Required
 ## Naming guidance
 
 Use product language in generated code and docs: `paid report`, `premium route`, `tool access`, `usage session`, `receipt`, `settlement`. Avoid presenting the flow as a superficial checkout.
+
+## Current TypeScript surface
+
+For TypeScript/Node services, use `@solana/mpp`.
+
+Server route gating with the released `@solana/mpp@0.6.x` API:
+
+```ts
+import { Mppx, solana } from "@solana/mpp/server";
+
+const mppx = Mppx.create({
+  secretKey,
+  realm,
+  methods: [solana.charge({ recipient, currency: usdcMint, decimals: 6, network, rpcUrl })],
+});
+
+const result = await mppx.charge({ amount: "1000", description: "Paid endpoint" })(request);
+if (result.status === 402) return result.challenge;
+return result.withReceipt(Response.json({ data: "paid result" }));
+```
+
+Amounts are integer base units. For a six-decimal token, `1000` means `0.001` token. Never pass a display decimal such as `"0.001"` to `amount`.
+
+Client support is exposed from `@solana/mpp/client`; select the client method that matches the server challenge and wallet implementation. Do not assume an unreleased convenience factory exists.
+
+```ts
+import { Mppx, solana } from "@solana/mpp/client";
+```

@@ -69,4 +69,34 @@ For Solana AI Kit integration, the useful unit is the `SKILL.md`, `references/`,
 
 ## Status
 
-Bounty submission candidate. Templates fail closed until a real Solana Pay Kit verifier and real paid-resource loader are wired.
+Bounty submission candidate. Templates use the released `@solana/mpp/server` and `mppx/express` surfaces, require server-side payment configuration before a paid route can start, and fail closed when required payment configuration is missing.
+
+## Working example
+
+The `examples/express-paid-api` app is the runnable reference path for this skill. It gates `/api/v1/agent-report` with the current TypeScript Pay Kit package:
+
+```ts
+import { solana } from "@solana/mpp/server";
+import { Mppx } from "mppx/express";
+```
+
+Run locally after installing dependencies:
+
+```bash
+npm --prefix examples/express-paid-api install
+npm --prefix examples/express-paid-api run typecheck
+npm --prefix examples/express-paid-api test
+```
+
+Required server env vars:
+
+```text
+PAID_ROUTE_AMOUNT_BASE_UNITS=1000
+PAID_ROUTE_CURRENCY_MINT=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+PAID_ROUTE_DECIMALS=6
+SOLANA_PAYMENT_RECIPIENT=<recipient-wallet>
+SOLANA_RPC_URL=https://402.surfnet.dev:8899
+MPP_SECRET_KEY=<server-secret>
+```
+
+`PAID_ROUTE_AMOUNT_BASE_UNITS` is always an integer. With a six-decimal token, `1000` equals `0.001` token. The example's integration test starts a real Express server and confirms that an unpaid request receives the SDK's actual `402 Payment Required` challenge; it never bypasses settlement verification.

@@ -1,80 +1,84 @@
-import { NextRequest, NextResponse } from "next/server";
+import { Mppx, solana } from "@solana/mpp/server";
 
-type PaymentContract = {
-  productId: string;
-  amountUsd: string;
-  token: "USDC";
+type PaymentRouteConfig = {
+  amountBaseUnits: string;
+  currencyMint: string;
+  decimals: number;
+  description: string;
   recipient: string;
-  network: "sandbox" | "devnet" | "mainnet-beta";
+  network: "localnet" | "devnet" | "mainnet-beta";
+  rpcUrl: string;
+  secretKey: string;
+  realm: string;
 };
 
-type PaymentIntent = PaymentContract & {
-  method: string;
-  path: string;
-  nonce: string;
-  expiresAt: string;
+const config: PaymentRouteConfig = {
+  amountBaseUnits: requiredPositiveIntegerEnv("PAID_ROUTE_AMOUNT_BASE_UNITS"),
+  currencyMint: requiredEnv("PAID_ROUTE_CURRENCY_MINT"),
+  decimals: requiredIntegerEnv("PAID_ROUTE_DECIMALS"),
+  description: process.env.PAID_ROUTE_DESCRIPTION ?? "Paid agentic commerce endpoint",
+  recipient: requiredEnv("SOLANA_PAYMENT_RECIPIENT"),
+  network: paymentNetwork(process.env.SOLANA_PAYMENT_NETWORK ?? "localnet"),
+  rpcUrl: requiredEnv("SOLANA_RPC_URL"),
+  secretKey: requiredEnv("MPP_SECRET_KEY"),
+  realm: process.env.MPP_REALM ?? "Solana Agentic Commerce",
 };
 
-type PaymentReceipt = {
-  id: string;
-  signature: string;
-  payer: string;
-  settledAt: string;
-};
+const mppx = Mppx.create({
+  secretKey: config.secretKey,
+  realm: config.realm,
+  methods: [
+    solana.charge({
+      recipient: config.recipient,
+      currency: config.currencyMint,
+      decimals: config.decimals,
+      network: config.network,
+      rpcUrl: config.rpcUrl,
+    }),
+  ],
+});
 
-type PaymentVerifier = (paymentHeader: string, intent: PaymentIntent) => Promise<PaymentReceipt>;
-type PaidResourceLoader = (receipt: PaymentReceipt) => Promise<Response>;
+export async function GET(request: Request) {
+  const result = await mppx.charge({
+    amount: config.amountBaseUnits,
+    description: config.description,
+  })(request);
 
-const contract: PaymentContract = {
-  productId: "premium-report",
-  amountUsd: "0.10",
-  token: "USDC",
-  recipient: requireEnv("SOLANA_PAYMENT_RECIPIENT"),
-  network: (process.env.SOLANA_PAYMENT_NETWORK as PaymentContract["network"]) ?? "sandbox",
-};
+  if (result.status === 402) return result.challenge;
 
-export async function GET(request: NextRequest) {
-  const intent = buildIntent(request, contract);
-  const paymentHeader = request.headers.get("x-payment");
-
-  if (!paymentHeader) {
-    return NextResponse.json(
-      { error: "payment_required", intent },
-      { status: 402, headers: { "X-Payment-Required": "true" } },
-    );
-  }
-
-  const verifier = getConfiguredPaymentVerifier();
-  const loadPaidResource = getConfiguredPaidResourceLoader();
-  const receipt = await verifier(paymentHeader, intent);
-
-  return loadPaidResource(receipt);
+  return result.withReceipt(
+    Response.json({
+      ok: true,
+      product: "agent-report",
+      settlement: "verified-by-solana-mpp",
+    }),
+  );
 }
 
-function buildIntent(request: NextRequest, payment: PaymentContract): PaymentIntent {
-  return {
-    method: request.method,
-    path: new URL(request.url).pathname,
-    productId: payment.productId,
-    amountUsd: payment.amountUsd,
-    token: payment.token,
-    recipient: payment.recipient,
-    network: payment.network,
-    nonce: crypto.randomUUID(),
-    expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-  };
-}
-
-function getConfiguredPaymentVerifier(): PaymentVerifier {
-  throw new Error("Configure a real Solana Pay Kit verifier before enabling this route.");
-}
-
-function getConfiguredPaidResourceLoader(): PaidResourceLoader {
-  throw new Error("Configure the real paid resource loader before enabling this route.");
-}
-
-function requireEnv(name: string): string {
+function requiredEnv(name: string) {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env var: ${name}`);
   return value;
+}
+
+function requiredPositiveIntegerEnv(name: string) {
+  const value = requiredEnv(name);
+  if (!/^\d+$/.test(value) || BigInt(value) <= 0n) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function requiredIntegerEnv(name: string) {
+  const raw = requiredEnv(name);
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > 18) {
+    throw new Error(`${name} must be an integer from 0 through 18`);
+  }
+  return value;
+}
+
+function paymentNetwork(value: string): PaymentRouteConfig["network"] {
+  if (value === "localnet" || value === "devnet" || value === "mainnet-beta") return value;
+  throw new Error("SOLANA_PAYMENT_NETWORK must be localnet, devnet, or mainnet-beta");
 }

@@ -1,0 +1,22 @@
+{
+  "name": "solana-agentic-commerce-skill",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent skill for Solana-paid APIs, paid agent tool calls, and Pay Kit commerce workflows.",
+  "scripts": {
+    "verify": "npm run validate && npm run example:typecheck && npm run example:test && npm --prefix examples/express-paid-api audit --audit-level=moderate",
+    "validate": "powershell -ExecutionPolicy Bypass -File scripts/validate-repo.ps1",
+    "example:install": "npm --prefix examples/express-paid-api install",
+    "example:typecheck": "npm --prefix examples/express-paid-api run typecheck",
+    "example:test": "npm --prefix examples/express-paid-api test"
+  },
+  "keywords": [
+    "solana",
+    "pay-kit",
+    "mpp",
+    "x402",
+    "agentic-commerce",
+    "ai-skills"
+  ],
+  "license": "MIT"
+}

@@ -1,59 +1,50 @@
-import type { NextFunction, Request, Response } from "express";
+import { solana } from "@solana/mpp/server";
+import { Mppx } from "mppx/express";
 
 type PaidRouteOptions = {
-  productId: string;
-  amountUsd: string;
-  token: "USDC";
+  amountBaseUnits: string;
+  currencyMint: string;
+  decimals: number;
+  description: string;
   recipient: string;
-  network: "sandbox" | "devnet" | "mainnet-beta";
-  verifyPayment: PaymentVerifier;
+  network: "localnet" | "devnet" | "mainnet-beta";
+  rpcUrl: string;
+  secretKey: string;
+  realm: string;
 };
-
-type PaymentIntent = Omit<PaidRouteOptions, "verifyPayment"> & {
-  method: string;
-  path: string;
-  nonce: string;
-  expiresAt: string;
-};
-
-type PaymentReceipt = {
-  id: string;
-  signature: string;
-  payer: string;
-  settledAt: string;
-};
-
-type PaymentVerifier = (paymentProof: string, intent: PaymentIntent) => Promise<PaymentReceipt>;
 
 export function requireSolanaPayment(options: PaidRouteOptions) {
-  return async function paidRoute(req: Request, res: Response, next: NextFunction) {
-    const intent: PaymentIntent = {
-      method: req.method,
-      path: req.path,
-      productId: options.productId,
-      amountUsd: options.amountUsd,
-      token: options.token,
-      recipient: options.recipient,
-      network: options.network,
-      nonce: crypto.randomUUID(),
-      expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-    };
+  requirePositiveBaseUnits(options.amountBaseUnits);
+  requireTokenDecimals(options.decimals);
 
-    const paymentProof = req.header("x-payment");
-    if (!paymentProof) {
-      res.status(402).json({ error: "payment_required", intent });
-      return;
-    }
+  const mppx = Mppx.create({
+    secretKey: options.secretKey,
+    realm: options.realm,
+    methods: [
+      solana.charge({
+        recipient: options.recipient,
+        currency: options.currencyMint,
+        decimals: options.decimals,
+        network: options.network,
+        rpcUrl: options.rpcUrl,
+      }),
+    ],
+  });
 
-    try {
-      res.locals.paymentReceipt = await options.verifyPayment(paymentProof, intent);
-      next();
-    } catch (error) {
-      res.status(402).json({
-        error: "payment_invalid",
-        reason: error instanceof Error ? error.message : "verification_failed",
-        intent,
-      });
-    }
-  };
+  return mppx.charge({
+    amount: options.amountBaseUnits,
+    description: options.description,
+  });
+}
+
+function requirePositiveBaseUnits(value: string) {
+  if (!/^\d+$/.test(value) || BigInt(value) <= 0n) {
+    throw new Error("amountBaseUnits must be a positive integer");
+  }
+}
+
+function requireTokenDecimals(value: number) {
+  if (!Number.isInteger(value) || value < 0 || value > 18) {
+    throw new Error("decimals must be an integer from 0 through 18");
+  }
 }
