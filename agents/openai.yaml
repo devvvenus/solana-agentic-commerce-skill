@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solana Agentic Commerce"
+  short_description: "Paid APIs and agent commerce on Solana"
+  default_prompt: "Use $solana-agentic-commerce to add a Solana stablecoin paywall to my API endpoint."
