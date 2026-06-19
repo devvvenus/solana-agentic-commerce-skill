@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { readPaymentContract } from "../src/payment-contract.js";
+import {
+  type PaymentContract,
+  readPaymentContract,
+  validatePaymentContract,
+} from "../src/payment-contract.js";
+
+const validContract: PaymentContract = {
+  amountBaseUnits: "1000",
+  currency: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  decimals: 6,
+  description: "Paid agentic commerce endpoint",
+  recipient: "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY",
+  network: "devnet",
+  rpcUrl: "https://api.devnet.solana.com",
+  secretKey: "unit-test-secret-with-sufficient-entropy",
+  realm: "Test Realm",
+};
 
 describe("readPaymentContract", () => {
   it("requires server-side recipient, RPC URL, amount, currency, and MPP secret", () => {
@@ -51,5 +67,119 @@ describe("readPaymentContract", () => {
         PAID_ROUTE_DECIMALS: "6",
       }),
     ).toThrow("positive integer");
+  });
+});
+
+describe("validatePaymentContract", () => {
+  it("accepts complete contracts with splits and commerce metadata", () => {
+    const contract: PaymentContract = {
+      ...validContract,
+      externalId: "order-123",
+      expiresInSeconds: 300,
+      splits: [
+        {
+          recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+          amount: "250",
+          memo: "Partner share",
+          ataCreationRequired: true,
+        },
+      ],
+    };
+
+    expect(validatePaymentContract(contract)).toBe(contract);
+  });
+
+  it("rejects an invalid primary recipient address", () => {
+    expect(() =>
+      validatePaymentContract({ ...validContract, recipient: "invalid-address" }),
+    ).toThrow();
+  });
+
+  it("rejects an invalid split recipient address", () => {
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        splits: [{ recipient: "invalid-address", amount: "1" }],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects secrets shorter than 32 characters", () => {
+    expect(() =>
+      validatePaymentContract({ ...validContract, secretKey: "too-short" }),
+    ).toThrow("at least 32 characters");
+  });
+
+  it("rejects zero-value splits", () => {
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        splits: [
+          {
+            recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+            amount: "0",
+          },
+        ],
+      }),
+    ).toThrow("positive integer");
+  });
+
+  it("rejects a split total equal to the charge amount", () => {
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        splits: [
+          {
+            recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+            amount: "1000",
+          },
+        ],
+      }),
+    ).toThrow("less than the charge amount");
+  });
+
+  it("rejects a split total greater than the charge amount", () => {
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        splits: [
+          {
+            recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+            amount: "1001",
+          },
+        ],
+      }),
+    ).toThrow("less than the charge amount");
+  });
+
+  it("rejects more than eight splits", () => {
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        amountBaseUnits: "10000",
+        splits: Array.from({ length: 9 }, () => ({
+          recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+          amount: "1",
+        })),
+      }),
+    ).toThrow("at most 8 splits");
+  });
+
+  it.each([-1, 1.5, 19, undefined])(
+    "rejects invalid SPL decimals: %s",
+    (decimals) => {
+      expect(() =>
+        validatePaymentContract({ ...validContract, decimals }),
+      ).toThrow("integer from 0 through 18");
+    },
+  );
+
+  it("rejects unsupported networks", () => {
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        network: "testnet" as PaymentContract["network"],
+      }),
+    ).toThrow("localnet, devnet, or mainnet-beta");
   });
 });
