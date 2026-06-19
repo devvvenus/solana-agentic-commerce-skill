@@ -29,3 +29,62 @@ jobs:
 
       - name: Verify repository and example
         run: npm run verify
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/express-paid-api/package-lock.json
+
+      - name: Install example dependencies
+        run: npm ci --prefix examples/express-paid-api
+
+      - name: Install Surfpool
+        shell: bash
+        run: |
+          curl -fsSL https://run.surfpool.run/ -o /tmp/surfpool-install.sh
+          VERSION=v1.3.1 bash /tmp/surfpool-install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/surfpool" --version
+
+      - name: Start Surfpool
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          surfpool start --ci --offline --airdrop-amount 0 > /tmp/surfpool.log 2>&1 &
+          echo "$!" > /tmp/surfpool.pid
+
+          for _ in {1..60}; do
+            if curl -fsS -X POST http://127.0.0.1:8899 \
+              -H 'content-type: application/json' \
+              -d '{"jsonrpc":"2.0","id":"health","method":"getHealth","params":[]}' \
+              | grep -q '"result":"ok"'; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat /tmp/surfpool.log
+          exit 1
+
+      - name: Run real on-chain payment E2E
+        run: npm run example:e2e
+
+      - name: Stop Surfpool
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/surfpool.pid ]; then
+            kill "$(cat /tmp/surfpool.pid)" || true
+          fi
+          cat /tmp/surfpool.log || true
