@@ -1,14 +1,17 @@
 import { solana } from "@solana/mpp/server";
 import type { Store } from "mppx";
 import { Mppx } from "mppx/express";
-import { createMemoryCommerceStore } from "./commerce-store.js";
+import {
+  type AtomicCommerceStore,
+  createMemoryCommerceStore,
+} from "./commerce-store.js";
 import type { PaymentContract } from "./payment-contract.js";
 
-export const sharedReplayStore: Store.AtomicStore = createMemoryCommerceStore();
+export const sharedReplayStore = createMemoryCommerceStore() as Store.AtomicStore;
 
 export function createPaymentMiddleware(
   contract: PaymentContract,
-  store: Store.AtomicStore = sharedReplayStore,
+  store: AtomicCommerceStore | Store.AtomicStore = sharedReplayStore,
 ) {
   const mppx = Mppx.create({
     secretKey: contract.secretKey,
@@ -21,7 +24,7 @@ export function createPaymentMiddleware(
         network: contract.network,
         rpcUrl: contract.rpcUrl,
         splits: contract.splits,
-        store,
+        store: store as Store.AtomicStore,
       }),
     ],
   });
