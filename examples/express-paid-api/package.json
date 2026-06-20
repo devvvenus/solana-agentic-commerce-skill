@@ -5,8 +5,8 @@
     "type": "module",
     "scripts": {
         "typecheck": "tsc --noEmit",
-        "test": "vitest run --exclude test/onchain-payment.e2e.test.ts",
-        "test:e2e": "vitest run test/onchain-payment.e2e.test.ts --testTimeout=120000"
+        "test": "vitest run --exclude \"test/*.e2e.test.ts\"",
+        "test:e2e": "vitest run test/onchain-payment.e2e.test.ts test/payment-security.e2e.test.ts --testTimeout=120000"
     },
     "dependencies": {
         "@solana/kit": "^6.5.0",
