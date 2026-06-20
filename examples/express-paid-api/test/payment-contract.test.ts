@@ -202,6 +202,38 @@ describe("validatePaymentContract", () => {
     ).toThrow("less than the charge amount");
   });
 
+  it("accepts a large split total exactly one base unit below the charge", () => {
+    const amountBaseUnits = "18014398509481985";
+    const splitAmounts = ["9007199254740992", "9007199254740992"];
+    const contract: PaymentContract = {
+      ...validContract,
+      amountBaseUnits,
+      splits: [
+        {
+          recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+          amount: splitAmounts[0],
+        },
+        {
+          recipient: "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY",
+          amount: splitAmounts[1],
+        },
+      ],
+    };
+
+    const exactSplitTotal = splitAmounts.reduce(
+      (total, amount) => total + BigInt(amount),
+      0n,
+    );
+    const roundedSplitTotal = splitAmounts.reduce(
+      (total, amount) => total + Number(amount),
+      0,
+    );
+
+    expect(exactSplitTotal).toBe(BigInt(amountBaseUnits) - 1n);
+    expect(roundedSplitTotal).toBe(Number(amountBaseUnits));
+    expect(validatePaymentContract(contract)).toBe(contract);
+  });
+
   it("rejects more than eight splits", () => {
     expect(() =>
       validatePaymentContract({
