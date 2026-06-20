@@ -23,6 +23,10 @@ export type MeteredSessionRecord = JsonObject & {
   expiresAt: string;
   maxUnits: string;
   usedUnits: string;
+  planId?: string;
+  createdAt?: string;
+  state?: "active" | "expired" | "closed";
+  reservations?: JsonObject;
 };
 
 export type SubscriptionPeriodRecord = JsonObject & {
@@ -33,6 +37,12 @@ export type SubscriptionPeriodRecord = JsonObject & {
   periodEnd: string;
   maxUnits: string;
   usedUnits: string;
+  planId?: string;
+  period?: string;
+  idempotencyKey?: string;
+  status?: "pending" | "active";
+  payment?: JsonObject;
+  verifiedReceiptReference?: string;
 };
 
 export type CounterRecord = JsonObject & {
