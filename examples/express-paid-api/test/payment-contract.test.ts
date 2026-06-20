@@ -95,6 +95,12 @@ describe("validatePaymentContract", () => {
     ).toThrow();
   });
 
+  it("rejects a malformed SPL mint address", () => {
+    expect(() =>
+      validatePaymentContract({ ...validContract, currency: "invalid-mint" }),
+    ).toThrow();
+  });
+
   it("rejects an invalid split recipient address", () => {
     expect(() =>
       validatePaymentContract({
@@ -146,6 +152,50 @@ describe("validatePaymentContract", () => {
           {
             recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
             amount: "1001",
+          },
+        ],
+      }),
+    ).toThrow("less than the charge amount");
+  });
+
+  it("rejects individually valid splits whose aggregate equals a large charge", () => {
+    const amountBaseUnits = "36028797018963970";
+    const splitAmount = "18014398509481985";
+
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        amountBaseUnits,
+        splits: [
+          {
+            recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+            amount: splitAmount,
+          },
+          {
+            recipient: "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY",
+            amount: splitAmount,
+          },
+        ],
+      }),
+    ).toThrow("less than the charge amount");
+  });
+
+  it("rejects individually valid splits whose aggregate exceeds a large charge", () => {
+    const amountBaseUnits = "36028797018963969";
+    const splitAmount = "18014398509481985";
+
+    expect(() =>
+      validatePaymentContract({
+        ...validContract,
+        amountBaseUnits,
+        splits: [
+          {
+            recipient: "BPFLoaderUpgradeab1e11111111111111111111111",
+            amount: splitAmount,
+          },
+          {
+            recipient: "CXhrFZJLKqjzmP3sjYLcF4dTeXWKCy9e2SXXZ2Yo6MPY",
+            amount: splitAmount,
           },
         ],
       }),

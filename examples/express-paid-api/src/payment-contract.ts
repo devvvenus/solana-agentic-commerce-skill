@@ -64,6 +64,7 @@ export function validatePaymentContract(
   );
 
   if (contract.currency !== "sol") {
+    address(contract.currency);
     validateDecimals(contract.decimals);
   }
 
