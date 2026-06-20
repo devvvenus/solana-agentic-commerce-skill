@@ -1,19 +1,56 @@
+import { createHash } from "node:crypto";
+
 import {
   type PaymentContract,
   type PaymentSplit,
   validatePaymentContract,
 } from "./payment-contract.js";
 
+export const MAX_U64 = 18446744073709551615n;
+
+export type CommerceErrorCode =
+  | "VALIDATION"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "CAPACITY_EXCEEDED"
+  | "EXPIRED"
+  | "CLOSED"
+  | "RECEIPT_MISMATCH"
+  | "RECEIPT_ALREADY_CLAIMED"
+  | "CORRUPT_STATE";
+
+export class CommerceError extends Error {
+  constructor(
+    public readonly code: CommerceErrorCode,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "CommerceError";
+  }
+}
+
+export type PaymentTerms = {
+  amountBaseUnits: string;
+  currency: string;
+  decimals?: number;
+  description: string;
+  recipient: string;
+  splits?: PaymentSplit[];
+  externalId?: string;
+  expiresAt?: string;
+};
+
 export type PremiumProduct = {
   id: string;
   kind: "premium-product";
-  payment: PaymentContract;
+  paymentTerms: PaymentTerms;
 };
 
 export type MarketplaceProduct = {
   id: string;
   kind: "marketplace-product";
-  payment: PaymentContract;
+  paymentTerms: PaymentTerms;
 };
 
 export type MeteredPlan = {
@@ -22,7 +59,8 @@ export type MeteredPlan = {
   unitPriceBaseUnits: string;
   maxUnits: number;
   sessionTtlSeconds: number;
-  payment: PaymentContract;
+  paymentExpirySeconds: number;
+  paymentTerms: PaymentTerms;
 };
 
 export type SubscriptionPlan = {
@@ -30,7 +68,8 @@ export type SubscriptionPlan = {
   kind: "subscription-plan";
   priceBaseUnits: string;
   periodDurationMonths: number;
-  payment: PaymentContract;
+  paymentExpirySeconds: number;
+  paymentTerms: PaymentTerms;
 };
 
 export type CommerceCatalog = {
@@ -54,15 +93,13 @@ type CatalogCharge = {
 
 export function readCommerceCatalog(env: NodeJS.ProcessEnv): CommerceCatalog {
   const source = env.COMMERCE_CATALOG_JSON;
-  if (!source) {
-    throw new Error("Missing required environment variable: COMMERCE_CATALOG_JSON");
-  }
+  if (!source) validation("Missing required environment variable: COMMERCE_CATALOG_JSON");
 
   let config: unknown;
   try {
     config = JSON.parse(source);
-  } catch {
-    throw new Error("COMMERCE_CATALOG_JSON must contain valid JSON");
+  } catch (cause) {
+    throw new CommerceError("VALIDATION", "COMMERCE_CATALOG_JSON must contain valid JSON", { cause });
   }
   const root = objectValue(config, "Commerce catalog");
   const payment = readPaymentDefaults(root.payment);
@@ -70,25 +107,27 @@ export function readCommerceCatalog(env: NodeJS.ProcessEnv): CommerceCatalog {
 
   const premiumProducts = new Map<string, PremiumProduct>();
   for (const value of arrayValue(root.premiumProducts, "premiumProducts")) {
-    const entry = readCharge(value, "premium product");
+    const raw = objectValue(value, "premium product");
+    const entry = readCharge(raw, "premium product");
     uniqueId(entry.id, seenIds);
-    const amountBaseUnits = decimalString(objectValue(value, "premium product").amountBaseUnits, "amountBaseUnits");
+    const amountBaseUnits = positiveU64(raw.amountBaseUnits, "amountBaseUnits");
     premiumProducts.set(entry.id, {
       id: entry.id,
       kind: "premium-product",
-      payment: paymentContract(payment, entry, amountBaseUnits),
+      paymentTerms: validatedPublicTerms(payment, entry, amountBaseUnits),
     });
   }
 
   const marketplaceProducts = new Map<string, MarketplaceProduct>();
   for (const value of arrayValue(root.marketplaceProducts, "marketplaceProducts")) {
-    const entry = readCharge(value, "marketplace product");
+    const raw = objectValue(value, "marketplace product");
+    const entry = readCharge(raw, "marketplace product");
     uniqueId(entry.id, seenIds);
-    const amountBaseUnits = decimalString(objectValue(value, "marketplace product").amountBaseUnits, "amountBaseUnits");
+    const amountBaseUnits = positiveU64(raw.amountBaseUnits, "amountBaseUnits");
     marketplaceProducts.set(entry.id, {
       id: entry.id,
       kind: "marketplace-product",
-      payment: paymentContract(payment, entry, amountBaseUnits),
+      paymentTerms: validatedPublicTerms(payment, entry, amountBaseUnits),
     });
   }
 
@@ -97,14 +136,15 @@ export function readCommerceCatalog(env: NodeJS.ProcessEnv): CommerceCatalog {
     const raw = objectValue(value, "metered plan");
     const entry = readCharge(raw, "metered plan");
     uniqueId(entry.id, seenIds);
-    const unitPriceBaseUnits = decimalString(raw.unitPriceBaseUnits, "unitPriceBaseUnits");
+    const unitPriceBaseUnits = positiveU64(raw.unitPriceBaseUnits, "unitPriceBaseUnits");
     meteredPlans.set(entry.id, {
       id: entry.id,
       kind: "metered-plan",
       unitPriceBaseUnits,
       maxUnits: safePositiveInteger(raw.maxUnits, "maxUnits"),
       sessionTtlSeconds: safePositiveInteger(raw.sessionTtlSeconds, "sessionTtlSeconds"),
-      payment: paymentContract(payment, entry, unitPriceBaseUnits),
+      paymentExpirySeconds: optionalSafePositiveInteger(raw.paymentExpirySeconds, "paymentExpirySeconds", 300),
+      paymentTerms: validatedPublicTerms(payment, entry, unitPriceBaseUnits),
     });
   }
 
@@ -113,36 +153,51 @@ export function readCommerceCatalog(env: NodeJS.ProcessEnv): CommerceCatalog {
     const raw = objectValue(value, "subscription plan");
     const entry = readCharge(raw, "subscription plan");
     uniqueId(entry.id, seenIds);
-    const priceBaseUnits = decimalString(raw.priceBaseUnits, "priceBaseUnits");
+    const priceBaseUnits = positiveU64(raw.priceBaseUnits, "priceBaseUnits");
     subscriptionPlans.set(entry.id, {
       id: entry.id,
       kind: "subscription-plan",
       priceBaseUnits,
       periodDurationMonths: safePositiveInteger(raw.periodDurationMonths, "periodDurationMonths"),
-      payment: paymentContract(payment, entry, priceBaseUnits),
+      paymentExpirySeconds: optionalSafePositiveInteger(raw.paymentExpirySeconds, "paymentExpirySeconds", 300),
+      paymentTerms: validatedPublicTerms(payment, entry, priceBaseUnits),
     });
   }
 
   if (
-    premiumProducts.size === 0 ||
-    marketplaceProducts.size === 0 ||
-    meteredPlans.size === 0 ||
-    subscriptionPlans.size === 0
+    premiumProducts.size === 0 || marketplaceProducts.size === 0 ||
+    meteredPlans.size === 0 || subscriptionPlans.size === 0
   ) {
-    throw new Error("Commerce catalog must contain every supported entry category");
+    validation("Commerce catalog must contain every supported entry category");
   }
 
   return { premiumProducts, marketplaceProducts, meteredPlans, subscriptionPlans };
 }
 
+export function paymentTermsSplitDigest(terms: Pick<PaymentTerms, "splits">): string {
+  const canonical = (terms.splits ?? []).map((split) => ({
+    recipient: split.recipient,
+    amount: split.amount,
+    ...(split.memo === undefined ? {} : { memo: split.memo }),
+    ...(split.ataCreationRequired === undefined ? {} : { ataCreationRequired: split.ataCreationRequired }),
+  }));
+  return `sha256:${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+}
+
+export function assertPositiveU64(value: string, field: string): bigint {
+  if (!/^\d+$/.test(value)) validation(`${field} must be a positive integer decimal string`);
+  const parsed = BigInt(value);
+  if (parsed <= 0n || parsed > MAX_U64) validation(`${field} must be between 1 and ${MAX_U64}`);
+  return parsed;
+}
+
 function readPaymentDefaults(value: unknown): PaymentDefaults {
   const raw = objectValue(value, "payment defaults");
-  const network = stringValue(raw.network, "payment.network") as PaymentContract["network"];
   const currency = stringValue(raw.currency, "payment.currency");
   return {
     currency,
     ...(currency === "sol" ? {} : { decimals: safeNonNegativeInteger(raw.decimals, "payment.decimals") }),
-    network,
+    network: stringValue(raw.network, "payment.network") as PaymentContract["network"],
     rpcUrl: stringValue(raw.rpcUrl, "payment.rpcUrl"),
     secretKey: stringValue(raw.secretKey, "payment.secretKey"),
     realm: stringValue(raw.realm, "payment.realm"),
@@ -157,13 +212,15 @@ function readCharge(value: unknown, field: string): CatalogCharge {
       const split = objectValue(splitValue, `${field}.split`);
       return {
         recipient: stringValue(split.recipient, "split.recipient"),
-        amount: decimalString(split.amount, "split.amount"),
+        amount: positiveU64(split.amount, "split.amount"),
         ...(split.memo === undefined ? {} : { memo: stringValue(split.memo, "split.memo") }),
         ...(split.ataCreationRequired === undefined
           ? {}
           : { ataCreationRequired: booleanValue(split.ataCreationRequired, "split.ataCreationRequired") }),
       };
     });
+  const splitTotal = (splits ?? []).reduce((total, split) => total + BigInt(split.amount), 0n);
+  if (splitTotal > MAX_U64) validation("Split total exceeds unsigned 64-bit range");
   return {
     id: stringValue(raw.id, `${field}.id`),
     description: stringValue(raw.description, `${field}.description`),
@@ -172,67 +229,89 @@ function readCharge(value: unknown, field: string): CatalogCharge {
   };
 }
 
-function paymentContract(
+function validatedPublicTerms(
   defaults: PaymentDefaults,
   charge: CatalogCharge,
   amountBaseUnits: string,
-): PaymentContract {
-  return validatePaymentContract({
-    ...defaults,
-    amountBaseUnits,
-    description: charge.description,
-    recipient: charge.recipient,
-    ...(charge.splits === undefined ? {} : { splits: charge.splits }),
-  });
+): PaymentTerms {
+  try {
+    const contract = validatePaymentContract({
+      ...defaults,
+      amountBaseUnits,
+      description: charge.description,
+      recipient: charge.recipient,
+      ...(charge.splits === undefined ? {} : { splits: charge.splits }),
+    });
+    return {
+      amountBaseUnits: contract.amountBaseUnits,
+      currency: contract.currency,
+      ...(contract.decimals === undefined ? {} : { decimals: contract.decimals }),
+      description: contract.description,
+      recipient: contract.recipient,
+      ...(contract.splits === undefined ? {} : { splits: contract.splits }),
+    };
+  } catch (cause) {
+    throw new CommerceError(
+      "VALIDATION",
+      cause instanceof Error ? cause.message : "Invalid payment terms",
+      { cause },
+    );
+  }
 }
 
 function uniqueId(id: string, seen: Set<string>): void {
-  if (seen.has(id)) throw new Error(`Duplicate catalog id: ${id}`);
+  if (seen.has(id)) validation(`Duplicate catalog id: ${id}`);
   seen.add(id);
+}
+
+function positiveU64(value: unknown, field: string): string {
+  const result = stringValue(value, field);
+  assertPositiveU64(result, field);
+  return result;
 }
 
 function objectValue(value: unknown, field: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${field} must be an object`);
+    validation(`${field} must be an object`);
   }
   return value as Record<string, unknown>;
 }
 
 function arrayValue(value: unknown, field: string): unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  if (!Array.isArray(value)) validation(`${field} must be an array`);
   return value;
 }
 
 function stringValue(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${field} must be a non-empty string`);
+    validation(`${field} must be a non-empty string`);
   }
   return value;
-}
-
-function decimalString(value: unknown, field: string): string {
-  const result = stringValue(value, field);
-  if (!/^\d+$/.test(result) || BigInt(result) <= 0n) {
-    throw new Error(`${field} must be a positive integer decimal string`);
-  }
-  return result;
 }
 
 function safePositiveInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${field} must be a positive safe integer`);
+    validation(`${field} must be a positive safe integer`);
   }
   return value;
 }
 
+function optionalSafePositiveInteger(value: unknown, field: string, fallback: number): number {
+  return value === undefined ? fallback : safePositiveInteger(value, field);
+}
+
 function safeNonNegativeInteger(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${field} must be a non-negative safe integer`);
+    validation(`${field} must be a non-negative safe integer`);
   }
   return value;
 }
 
 function booleanValue(value: unknown, field: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  if (typeof value !== "boolean") validation(`${field} must be a boolean`);
   return value;
+}
+
+function validation(message: string): never {
+  throw new CommerceError("VALIDATION", message);
 }

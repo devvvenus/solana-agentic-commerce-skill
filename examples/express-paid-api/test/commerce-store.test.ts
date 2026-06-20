@@ -4,6 +4,8 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { PaymentContract } from "../src/payment-contract.js";
 import {
   createMemoryCommerceStore,
+  type CommerceStoreItemMap,
+  type CommerceStoreTransaction,
   type CounterRecord,
   type FulfillmentRecord,
   type JsonObject,
@@ -224,6 +226,49 @@ describe("createMemoryCommerceStore", () => {
       clearTimeout(timeout);
     }
     expect(await store.get("counter:failure")).toEqual({ value: 2 });
+  });
+
+  it("rolls back every key when a multi-key transaction throws", async () => {
+    const store = createMemoryCommerceStore();
+    await store.put("counter:first", { value: 1 });
+    await store.put("counter:second", { value: 2 });
+
+    await expect(store.transaction((transaction) => {
+      transaction.set("counter:first", { value: 10 });
+      transaction.delete("counter:second");
+      throw new Error("transaction failed");
+    })).rejects.toThrow("transaction failed");
+
+    expect(await store.get("counter:first")).toEqual({ value: 1 });
+    expect(await store.get("counter:second")).toEqual({ value: 2 });
+  });
+
+  it("serializes multi-key transactions against regular operations", async () => {
+    const store = createMemoryCommerceStore();
+    await store.put("counter:first", { value: 0 });
+    await store.put("counter:second", { value: 0 });
+
+    await Promise.all(Array.from({ length: 100 }, () => store.transaction((transaction) => {
+      const first = transaction.get("counter:first")!;
+      const second = transaction.get("counter:second")!;
+      transaction.set("counter:first", { value: first.value + 1 });
+      transaction.set("counter:second", { value: second.value + 1 });
+    })));
+
+    expect(await store.get("counter:first")).toEqual({ value: 100 });
+    expect(await store.get("counter:second")).toEqual({ value: 100 });
+  });
+
+  it("rejects Promise-returning transaction callbacks without committing writes", async () => {
+    const store = createMemoryCommerceStore();
+    await store.put("counter:first", { value: 1 });
+
+    await expect(store.transaction((async (transaction: CommerceStoreTransaction<CommerceStoreItemMap>) => {
+      transaction.set("counter:first", { value: 2 });
+      return "invalid";
+    }) as never)).rejects.toThrow("synchronous");
+
+    expect(await store.get("counter:first")).toEqual({ value: 1 });
   });
 
   it("round-trips fulfillment, metered session, and subscription period records", async () => {

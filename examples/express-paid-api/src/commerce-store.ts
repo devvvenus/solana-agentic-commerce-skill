@@ -27,6 +27,7 @@ export type MeteredSessionRecord = JsonObject & {
   createdAt?: string;
   state?: "active" | "expired" | "closed";
   reservations?: JsonObject;
+  closedAt?: string;
 };
 
 export type SubscriptionPeriodRecord = JsonObject & {
@@ -42,7 +43,18 @@ export type SubscriptionPeriodRecord = JsonObject & {
   idempotencyKey?: string;
   status?: "pending" | "active";
   payment?: JsonObject;
-  verifiedReceiptReference?: string;
+  paymentTerms?: JsonObject;
+  operationExpiresAt?: string;
+  receiptReference?: string;
+  verifiedAt?: string;
+};
+
+export type ReceiptClaimRecord = JsonObject & {
+  kind: "receipt-claim";
+  receiptReference: string;
+  operationId: string;
+  externalId: string;
+  claimedAt: string;
 };
 
 export type CounterRecord = JsonObject & {
@@ -53,22 +65,34 @@ export type CommerceStoreItemMap = {
   [key: `counter:${string}`]: CounterRecord;
   [key: `fulfillment:${string}`]: FulfillmentRecord;
   [key: `metadata:${string}`]: JsonObject;
+  [key: `receipt-claim:${string}`]: ReceiptClaimRecord;
   [key: `session:${string}`]: MeteredSessionRecord;
   [key: `solana-charge:consumed:${string}`]: boolean;
   [key: `subscription:${string}`]: SubscriptionPeriodRecord;
 };
 
-/** Production adapters must preserve these atomic single-key update semantics. */
+export interface CommerceStoreTransaction<ItemMap extends JsonItemMap> {
+  get<Key extends keyof ItemMap & string>(key: Key): ItemMap[Key] | null;
+  set<Key extends keyof ItemMap & string>(key: Key, value: ItemMap[Key]): void;
+  delete<Key extends keyof ItemMap & string>(key: Key): void;
+}
+
+/**
+ * Production adapters must serialize every operation with transaction() and
+ * commit all transaction writes atomically or roll them all back.
+ */
 export interface AtomicCommerceStore<
   ItemMap extends JsonItemMap = CommerceStoreItemMap,
 > {
   get<Key extends keyof ItemMap & string>(key: Key): Promise<ItemMap[Key] | null>;
-  put<Key extends keyof ItemMap & string>(key: Key, value: ItemMap[Key]): Promise<void>;
-  delete<Key extends keyof ItemMap & string>(key: Key): Promise<void>;
+  put<Key extends string>(key: Key, value: Key extends keyof ItemMap ? ItemMap[Key] : unknown): Promise<void>;
+  delete(key: string): Promise<void>;
   update<Key extends keyof ItemMap & string, Result>(
     key: Key,
     fn: (current: ItemMap[Key] | null) => CommerceStoreChange<ItemMap[Key], Result>,
   ): Promise<Result>;
+  /** The callback must be synchronous and side-effect free outside the transaction object. */
+  transaction<Result>(fn: (transaction: CommerceStoreTransaction<ItemMap>) => Result): Promise<Result>;
 }
 
 function jsonValueError(path: string, reason: string): never {
@@ -133,41 +157,39 @@ function serializeJson(value: unknown): string {
 export function createMemoryCommerceStore<
   ItemMap extends JsonItemMap = CommerceStoreItemMap,
 >(): AtomicCommerceStore<ItemMap> {
-  const values = new Map<string, string>();
-  const operationTails = new Map<string, Promise<void>>();
+  let values = new Map<string, string>();
+  let operationTail = Promise.resolve();
 
-  async function withKeyLock<Result>(key: string, operation: () => Result): Promise<Result> {
-    const previous = operationTails.get(key) ?? Promise.resolve();
+  async function withGlobalLock<Result>(operation: () => Result): Promise<Result> {
+    const previous = operationTail;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const tail = previous.then(() => gate);
-    operationTails.set(key, tail);
+    operationTail = previous.then(() => gate);
 
     await previous;
     try {
       return operation();
     } finally {
       release();
-      if (operationTails.get(key) === tail) operationTails.delete(key);
     }
   }
 
   return {
     get<Key extends keyof ItemMap & string>(key: Key) {
-      return withKeyLock(key, () => {
+      return withGlobalLock(() => {
         const stored = values.get(key);
         return stored === undefined ? null : (JSON.parse(stored) as ItemMap[Key]);
       });
     },
-    put<Key extends keyof ItemMap & string>(key: Key, value: ItemMap[Key]) {
-      return withKeyLock(key, () => {
+    put<Key extends string>(key: Key, value: Key extends keyof ItemMap ? ItemMap[Key] : unknown) {
+      return withGlobalLock(() => {
         values.set(key, serializeJson(value));
       });
     },
-    delete<Key extends keyof ItemMap & string>(key: Key) {
-      return withKeyLock(key, () => {
+    delete(key: string) {
+      return withGlobalLock(() => {
         values.delete(key);
       });
     },
@@ -175,7 +197,7 @@ export function createMemoryCommerceStore<
       key: Key,
       fn: (current: ItemMap[Key] | null) => CommerceStoreChange<ItemMap[Key], Result>,
     ) {
-      return withKeyLock(key, () => {
+      return withGlobalLock(() => {
         const stored = values.get(key);
         const current = stored === undefined ? null : (JSON.parse(stored) as ItemMap[Key]);
         const change = fn(current);
@@ -183,6 +205,34 @@ export function createMemoryCommerceStore<
         if (change.op === "set") values.set(key, serializeJson(change.value));
         if (change.op === "delete") values.delete(key);
         return change.result;
+      });
+    },
+    transaction<Result>(fn: (transaction: CommerceStoreTransaction<ItemMap>) => Result) {
+      return withGlobalLock(() => {
+        const staged = new Map(values);
+        const transaction: CommerceStoreTransaction<ItemMap> = {
+          get<Key extends keyof ItemMap & string>(key: Key) {
+            const stored = staged.get(key);
+            return stored === undefined ? null : (JSON.parse(stored) as ItemMap[Key]);
+          },
+          set<Key extends keyof ItemMap & string>(key: Key, value: ItemMap[Key]) {
+            staged.set(key, serializeJson(value));
+          },
+          delete<Key extends keyof ItemMap & string>(key: Key) {
+            staged.delete(key);
+          },
+        };
+        const result = fn(transaction);
+        if (
+          result !== null &&
+          (typeof result === "object" || typeof result === "function") &&
+          "then" in result &&
+          typeof result.then === "function"
+        ) {
+          throw new TypeError("Commerce store transaction callbacks must be synchronous");
+        }
+        values = staged;
+        return result;
       });
     },
   };
