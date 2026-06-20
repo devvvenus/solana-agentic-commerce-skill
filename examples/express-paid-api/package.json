@@ -15,6 +15,8 @@
         "mppx": "^0.7.0"
     },
     "devDependencies": {
+        "@solana-program/system": "0.12.0",
+        "@solana-program/token": "0.11.0",
         "@types/express": "^5.0.0",
         "@types/node": "^20.14.12",
         "typescript": "^5.5.4",

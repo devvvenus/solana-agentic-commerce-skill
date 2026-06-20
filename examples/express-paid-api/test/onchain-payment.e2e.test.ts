@@ -1,57 +1,53 @@
-import type { Server } from "node:http";
-import { generateKeyPairSigner } from "@solana/kit";
-import { Mppx, solana } from "@solana/mpp/client";
 import { Receipt } from "mppx";
 import { afterEach, describe, expect, it } from "vitest";
-import { createServer } from "../src/server.js";
+import type { Address, TransactionSigner } from "@solana/kit";
 
-const rpcUrl = process.env.SURFPOOL_RPC_URL ?? "http://127.0.0.1:8899";
-const paymentAmountLamports = 25_000n;
+import {
+  airdropAndWait,
+  assertRpcReady,
+  createAssociatedTokenAccount,
+  createMppClient,
+  createSigner,
+  createSplMint,
+  defaultRpcUrl,
+  getLamportBalance,
+  getTokenBalance,
+  mintSplTokensToOwner,
+  splTokenDecimals,
+  startExpressServer,
+  waitForLamportBalanceAtLeast,
+  waitForTokenBalanceAtLeast,
+  waitForTransaction,
+} from "./support/surfpool.js";
 
-let server: Server | undefined;
+const rpcUrl = defaultRpcUrl;
+const mppSecret = "surfpool-e2e-secret-with-sufficient-entropy";
+const realm = "surfpool.complete-commerce.e2e";
+
+let closeServer: (() => Promise<void>) | undefined;
 
 afterEach(async () => {
-  if (server) {
-    await new Promise<void>((resolve, reject) => {
-      server?.close((error) => (error ? reject(error) : resolve()));
-    });
-    server = undefined;
-  }
+  if (!closeServer) return;
+  await closeServer();
+  closeServer = undefined;
 });
 
-describe("paid Express route on Surfpool", () => {
-  it("settles a native SOL payment on-chain before returning paid content", async () => {
+describe("paid Express commerce routes on Surfpool", () => {
+  it("settles the native SOL report route before returning the report", async () => {
     await assertRpcReady(rpcUrl);
+    const payer = await createSigner();
+    const recipient = await createSigner();
+    const amount = 25_000n;
 
-    const payer = await generateKeyPairSigner();
-    const recipient = await generateKeyPairSigner();
+    await airdropAndWait(payer.address, 1_000_000_000n, rpcUrl);
+    await airdropAndWait(recipient.address, 1_000_000n, rpcUrl);
+    const before = await getLamportBalance(recipient.address, rpcUrl);
+    const baseUrl = await serve(nativeEnv(recipient.address, amount));
 
-    await requestAirdrop(rpcUrl, payer.address, 1_000_000_000n);
-    await requestAirdrop(rpcUrl, recipient.address, 1_000_000n);
-    await waitForBalanceAtLeast(rpcUrl, payer.address, 1_000_000_000n);
-    const recipientBalanceBefore = await waitForBalanceAtLeast(rpcUrl, recipient.address, 1_000_000n);
-
-    const app = createServer({
-      PAID_ROUTE_AMOUNT_BASE_UNITS: paymentAmountLamports.toString(),
-      PAID_ROUTE_CURRENCY: "sol",
-      SOLANA_PAYMENT_NETWORK: "localnet",
-      SOLANA_PAYMENT_RECIPIENT: recipient.address,
-      SOLANA_RPC_URL: rpcUrl,
-      MPP_SECRET_KEY: "e2e-test-secret-with-sufficient-entropy",
-      MPP_REALM: "surfpool.e2e",
-    });
-
-    server = app.listen(0, "127.0.0.1");
-    await new Promise<void>((resolve) => server?.once("listening", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
-
-    const mppx = Mppx.create({
-      methods: [solana.charge({ signer: payer, rpcUrl })],
-      polyfill: false,
-    });
-
-    const response = await mppx.fetch(`http://127.0.0.1:${address.port}/api/v1/agent-report`);
+    const response = await createMppClient(payer, rpcUrl).fetch(`${baseUrl}/api/v1/agent-report`);
+    const receipt = await expectSuccessfulReceipt(response);
+    await expectConfirmedReceiptTransaction(receipt);
+    const after = await waitForLamportBalanceAtLeast(recipient.address, before + amount, rpcUrl);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
@@ -59,74 +55,327 @@ describe("paid Express route on Surfpool", () => {
       product: "agent-report",
       settlement: "verified-by-solana-mpp",
     });
+    expect(after - before).toBe(amount);
+  }, 120_000);
 
-    const receipt = Receipt.fromResponse(response);
-    expect(receipt).toMatchObject({ method: "solana", status: "success" });
-    expect(receipt.reference).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
+  it("returns a live RPC balance from the wallet tool only after native SOL payment", async () => {
+    await assertRpcReady(rpcUrl);
+    const payer = await createSigner();
+    const recipient = await createSigner();
+    const inspectedWallet = await createSigner();
+    const amount = 30_000n;
 
-    const transaction = await waitForTransaction(rpcUrl, receipt.reference);
-    expect(transaction.meta?.err ?? null).toBeNull();
+    await airdropAndWait(payer.address, 1_000_000_000n, rpcUrl);
+    await airdropAndWait(recipient.address, 1_000_000n, rpcUrl);
+    await airdropAndWait(inspectedWallet.address, 7_777_777n, rpcUrl);
+    const recipientBefore = await getLamportBalance(recipient.address, rpcUrl);
+    const expectedWalletBalance = await getLamportBalance(inspectedWallet.address, rpcUrl);
+    const baseUrl = await serve(nativeEnv(recipient.address, amount));
 
-    const recipientBalanceAfter = await waitForBalanceAtLeast(
-      rpcUrl,
-      recipient.address,
-      recipientBalanceBefore + paymentAmountLamports,
+    const response = await createMppClient(payer, rpcUrl).fetch(`${baseUrl}/api/v1/tools/wallet-analysis`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address: inspectedWallet.address }),
+    });
+    const receipt = await expectSuccessfulReceipt(response);
+    await expectConfirmedReceiptTransaction(receipt);
+    const recipientAfter = await waitForLamportBalanceAtLeast(recipient.address, recipientBefore + amount, rpcUrl);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      address: inspectedWallet.address,
+      balanceLamports: expectedWalletBalance.toString(),
+    });
+    expect(recipientAfter - recipientBefore).toBe(amount);
+  }, 120_000);
+
+  it("settles the SPL premium route with recipient token balance evidence", async () => {
+    await assertRpcReady(rpcUrl);
+    const actors = await createSplActors(5_000_000n);
+    const amount = 2_500_000n;
+    await createAssociatedTokenAccount({ payer: actors.payer, mint: actors.mint, owner: actors.seller.address }, rpcUrl);
+    const before = await getTokenBalance(actors.seller.address, actors.mint, rpcUrl);
+    const baseUrl = await serve(splEnv(actors, { premiumAmount: amount }));
+
+    const response = await createMppClient(actors.payer, rpcUrl).fetch(`${baseUrl}/api/v1/premium/premium-report`);
+    const receipt = await expectSuccessfulReceipt(response);
+    await expectConfirmedReceiptTransaction(receipt);
+    const after = await waitForTokenBalanceAtLeast(actors.seller.address, actors.mint, before + amount, rpcUrl);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, productId: "premium-report", access: "granted" });
+    expect(after - before).toBe(amount);
+  }, 120_000);
+
+  it("settles the SPL marketplace split with exact seller, platform, and referrer token deltas", async () => {
+    await assertRpcReady(rpcUrl);
+    const actors = await createSplActors(20_000_000n);
+    const total = 10_000_000n;
+    const platform = 1_000_000n;
+    const referrer = 500_000n;
+    const seller = total - platform - referrer;
+    await Promise.all([
+      createAssociatedTokenAccount({ payer: actors.payer, mint: actors.mint, owner: actors.seller.address }, rpcUrl),
+      createAssociatedTokenAccount({ payer: actors.payer, mint: actors.mint, owner: actors.platform.address }, rpcUrl),
+      createAssociatedTokenAccount({ payer: actors.payer, mint: actors.mint, owner: actors.referrer.address }, rpcUrl),
+    ]);
+    const before = await tokenBalances(actors);
+    const baseUrl = await serve(splEnv(actors, {
+      marketplaceAmount: total,
+      platformSplit: platform,
+      referrerSplit: referrer,
+    }));
+
+    const response = await createMppClient(actors.payer, rpcUrl).fetch(
+      `${baseUrl}/api/v1/marketplace/marketplace-dataset/purchase`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: "purchase-1" }),
+      },
     );
-    expect(recipientBalanceAfter - recipientBalanceBefore).toBe(paymentAmountLamports);
+    const receipt = await expectSuccessfulReceipt(response);
+    await expectConfirmedReceiptTransaction(receipt);
+    const after = await waitForTokenDeltas(actors, before, { seller, platform, referrer });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      productId: "marketplace-dataset",
+      purchaseId: "purchase-1",
+    });
+    expect(after.seller - before.seller).toBe(seller);
+    expect(after.platform - before.platform).toBe(platform);
+    expect(after.referrer - before.referrer).toBe(referrer);
+  }, 120_000);
+
+  it("settles a metered session with a real SPL payment and increments used units", async () => {
+    await assertRpcReady(rpcUrl);
+    const actors = await createSplActors(10_000_000n);
+    const unitPrice = 1_000_000n;
+    const units = 3;
+    const amount = unitPrice * BigInt(units);
+    await createAssociatedTokenAccount({ payer: actors.payer, mint: actors.mint, owner: actors.seller.address }, rpcUrl);
+    const before = await getTokenBalance(actors.seller.address, actors.mint, rpcUrl);
+    const baseUrl = await serve(splEnv(actors, { meteredUnitPrice: unitPrice }));
+    const session = await postJson(`${baseUrl}/api/v1/sessions`, { accountId: "acct", planId: "metered-api" });
+
+    const response = await createMppClient(actors.payer, rpcUrl).fetch(
+      `${baseUrl}/api/v1/sessions/${session.sessionId}/settlements`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ units, idempotencyKey: "usage-1" }),
+      },
+    );
+    const receipt = await expectSuccessfulReceipt(response);
+    await expectConfirmedReceiptTransaction(receipt);
+    const after = await waitForTokenBalanceAtLeast(actors.seller.address, actors.mint, before + amount, rpcUrl);
+    const currentSession = await (await fetch(`${baseUrl}/api/v1/sessions/${session.sessionId}`)).json();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, settlement: { status: "settled", units: String(units) } });
+    expect(currentSession.usedUnits).toBe(String(units));
+    expect(after - before).toBe(amount);
+  }, 120_000);
+
+  it("settles an SPL subscription renewal and activates the billing period", async () => {
+    await assertRpcReady(rpcUrl);
+    const actors = await createSplActors(20_000_000n);
+    const amount = 12_000_000n;
+    await createAssociatedTokenAccount({ payer: actors.payer, mint: actors.mint, owner: actors.seller.address }, rpcUrl);
+    const before = await getTokenBalance(actors.seller.address, actors.mint, rpcUrl);
+    const baseUrl = await serve(splEnv(actors, { renewalAmount: amount }));
+
+    const response = await createMppClient(actors.payer, rpcUrl).fetch(`${baseUrl}/api/v1/subscriptions/renewals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        accountId: "acct",
+        planId: "monthly-api",
+        period: "2028-02",
+        idempotencyKey: "renew-1",
+      }),
+    });
+    const receipt = await expectSuccessfulReceipt(response);
+    await expectConfirmedReceiptTransaction(receipt);
+    const after = await waitForTokenBalanceAtLeast(actors.seller.address, actors.mint, before + amount, rpcUrl);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      renewal: { status: "active", accountId: "acct", planId: "monthly-api", period: "2028-02" },
+    });
+    expect(after - before).toBe(amount);
   }, 120_000);
 });
 
-async function assertRpcReady(url: string) {
-  await rpc<string>(url, "getHealth");
+type SplActors = {
+  payer: TransactionSigner;
+  mintAuthority: TransactionSigner;
+  mintSigner: TransactionSigner;
+  mint: Address;
+  seller: TransactionSigner;
+  platform: TransactionSigner;
+  referrer: TransactionSigner;
+};
+
+type SplCatalogAmounts = Partial<{
+  premiumAmount: bigint;
+  marketplaceAmount: bigint;
+  platformSplit: bigint;
+  referrerSplit: bigint;
+  meteredUnitPrice: bigint;
+  renewalAmount: bigint;
+}>;
+
+async function serve(env: NodeJS.ProcessEnv): Promise<string> {
+  const server = await startExpressServer(env);
+  closeServer = server.close;
+  return server.baseUrl;
 }
 
-async function requestAirdrop(url: string, recipient: string, lamports: bigint) {
-  await rpc<string>(url, "requestAirdrop", [recipient, Number(lamports)]);
+async function createSplActors(payerTokens: bigint): Promise<SplActors> {
+  const payer = await createSigner();
+  const mintAuthority = await createSigner();
+  const mintSigner = await createSigner();
+  const seller = await createSigner();
+  const platform = await createSigner();
+  const referrer = await createSigner();
+
+  await airdropAndWait(payer.address, 2_000_000_000n, rpcUrl);
+  const mint = await createSplMint({ payer, mintAuthority, mint: mintSigner }, rpcUrl);
+  await mintSplTokensToOwner({ payer, mint, mintAuthority, owner: payer.address, amount: payerTokens }, rpcUrl);
+
+  return { payer, mintAuthority, mintSigner, mint, seller, platform, referrer };
 }
 
-async function getBalance(url: string, address: string): Promise<bigint> {
-  const result = await rpc<{ value: number }>(url, "getBalance", [address, { commitment: "confirmed" }]);
-  return BigInt(result.value);
+async function expectSuccessfulReceipt(response: Response): Promise<ReturnType<typeof Receipt.fromResponse>> {
+  const receipt = Receipt.fromResponse(response);
+  expect(receipt).toMatchObject({ method: "solana", status: "success" });
+  expect(receipt.reference).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
+  return receipt;
 }
 
-async function waitForBalanceAtLeast(url: string, address: string, expected: bigint): Promise<bigint> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 30_000) {
-    const balance = await getBalance(url, address);
-    if (balance >= expected) return balance;
-    await delay(500);
-  }
-  throw new Error(`Timed out waiting for ${address} balance to reach ${expected}`);
+async function expectConfirmedReceiptTransaction(receipt: ReturnType<typeof Receipt.fromResponse>) {
+  const transaction = await waitForTransaction(receipt.reference, rpcUrl);
+  expect(transaction.meta?.err ?? null).toBeNull();
+  return transaction;
 }
 
-async function waitForTransaction(url: string, signature: string): Promise<{ meta?: { err?: unknown } | null }> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 30_000) {
-    const result = await rpc<{ meta?: { err?: unknown } | null } | null>(url, "getTransaction", [
-      signature,
-      { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 0 },
-    ]);
-    if (result) return result;
-    await delay(500);
-  }
-  throw new Error(`Timed out waiting for transaction ${signature}`);
+function nativeEnv(recipient: Address, amount: bigint): NodeJS.ProcessEnv {
+  return {
+    PAID_ROUTE_AMOUNT_BASE_UNITS: amount.toString(),
+    PAID_ROUTE_CURRENCY: "sol",
+    PAID_ROUTE_DESCRIPTION: "Agent report",
+    SOLANA_PAYMENT_NETWORK: "localnet",
+    SOLANA_PAYMENT_RECIPIENT: recipient,
+    SOLANA_RPC_URL: rpcUrl,
+    MPP_SECRET_KEY: mppSecret,
+    MPP_REALM: realm,
+  };
 }
 
-async function rpc<T>(url: string, method: string, params: unknown[] = []): Promise<T> {
+function splEnv(actors: SplActors, amounts: SplCatalogAmounts = {}): NodeJS.ProcessEnv {
+  const premiumAmount = amounts.premiumAmount ?? 2_500_000n;
+  const marketplaceAmount = amounts.marketplaceAmount ?? 10_000_000n;
+  const platformSplit = amounts.platformSplit ?? 1_000_000n;
+  const referrerSplit = amounts.referrerSplit ?? 500_000n;
+  const meteredUnitPrice = amounts.meteredUnitPrice ?? 1_000_000n;
+  const renewalAmount = amounts.renewalAmount ?? 12_000_000n;
+
+  return {
+    PAID_ROUTE_AMOUNT_BASE_UNITS: premiumAmount.toString(),
+    PAID_ROUTE_CURRENCY_MINT: actors.mint,
+    PAID_ROUTE_DECIMALS: String(splTokenDecimals),
+    PAID_ROUTE_DESCRIPTION: "Agent report",
+    SOLANA_PAYMENT_NETWORK: "localnet",
+    SOLANA_PAYMENT_RECIPIENT: actors.seller.address,
+    SOLANA_RPC_URL: rpcUrl,
+    MPP_SECRET_KEY: mppSecret,
+    MPP_REALM: realm,
+    COMMERCE_CATALOG_JSON: JSON.stringify({
+      payment: {
+        currency: actors.mint,
+        decimals: splTokenDecimals,
+        network: "localnet",
+        rpcUrl,
+        secretKey: mppSecret,
+        realm,
+      },
+      premiumProducts: [{
+        id: "premium-report",
+        amountBaseUnits: premiumAmount.toString(),
+        description: "Premium research report",
+        recipient: actors.seller.address,
+      }],
+      marketplaceProducts: [{
+        id: "marketplace-dataset",
+        amountBaseUnits: marketplaceAmount.toString(),
+        description: "Marketplace dataset",
+        recipient: actors.seller.address,
+        splits: [
+          { recipient: actors.platform.address, amount: platformSplit.toString(), memo: "Platform" },
+          { recipient: actors.referrer.address, amount: referrerSplit.toString(), memo: "Referrer" },
+        ],
+      }],
+      meteredPlans: [{
+        id: "metered-api",
+        unitPriceBaseUnits: meteredUnitPrice.toString(),
+        maxUnits: 10,
+        sessionTtlSeconds: 3600,
+        paymentExpirySeconds: 300,
+        description: "Metered API usage",
+        recipient: actors.seller.address,
+      }],
+      subscriptionPlans: [{
+        id: "monthly-api",
+        priceBaseUnits: renewalAmount.toString(),
+        periodDurationMonths: 1,
+        paymentExpirySeconds: 300,
+        description: "Monthly API access",
+        recipient: actors.seller.address,
+      }],
+    }),
+  };
+}
+
+async function postJson(url: string, body: unknown): Promise<Record<string, string>> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: method, method, params }),
+    body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    throw new Error(`${method} HTTP ${response.status}: ${await response.text()}`);
-  }
-
-  const body = (await response.json()) as { result?: T; error?: { code: number; message: string } };
-  if (body.error) throw new Error(`${method} RPC ${body.error.code}: ${body.error.message}`);
-  return body.result as T;
+  expect(response.status).toBeLessThan(300);
+  return response.json() as Promise<Record<string, string>>;
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function tokenBalances(actors: SplActors) {
+  const [seller, platform, referrer] = await Promise.all([
+    getTokenBalance(actors.seller.address, actors.mint, rpcUrl),
+    getTokenBalance(actors.platform.address, actors.mint, rpcUrl),
+    getTokenBalance(actors.referrer.address, actors.mint, rpcUrl),
+  ]);
+  return { seller, platform, referrer };
+}
+
+async function waitForTokenDeltas(
+  actors: SplActors,
+  before: Awaited<ReturnType<typeof tokenBalances>>,
+  expected: Awaited<ReturnType<typeof tokenBalances>>,
+) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 30_000) {
+    const current = await tokenBalances(actors);
+    if (
+      current.seller - before.seller === expected.seller &&
+      current.platform - before.platform === expected.platform &&
+      current.referrer - before.referrer === expected.referrer
+    ) {
+      return current;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error("Timed out waiting for marketplace token deltas");
 }
