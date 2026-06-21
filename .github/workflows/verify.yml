@@ -77,7 +77,7 @@ jobs:
           cat /tmp/surfpool.log
           exit 1
 
-      - name: Run real on-chain payment E2E
+      - name: Run Surfpool settlement and adversarial E2E suites
         run: npm run example:e2e
 
       - name: Stop Surfpool

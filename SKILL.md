@@ -21,6 +21,7 @@ This is not an SDK-porting skill. It is a builder workflow skill for applying Pa
 | Metered usage, session billing, subscriptions | `workflows/metered-session.md`, then `references/security-checklist.md` |
 | Security review of an existing payment route | `references/security-checklist.md`, then `commands/paywall-review.md` |
 | Need starter code | Use `templates/nextjs-paid-route.ts` or `templates/express-paid-middleware.ts` as the starting point |
+| Need a verified Express reference | Read `README.md`, then inspect `examples/express-paid-api/src/server.ts`, `src/catalog.ts`, `src/commerce-service.ts`, `src/commerce-store.ts`, and the tests under `examples/express-paid-api/test/` |
 
 ## Core Workflow
 
@@ -40,6 +41,17 @@ This is not an SDK-porting skill. It is a builder workflow skill for applying Pa
 6. Add tests for unpaid request, paid replay, stale nonce, wrong amount, wrong recipient, duplicate proof, rejected signature, and timeout.
 7. Produce a short operator note explaining keys, RPC requirements, sandbox/devnet/mainnet settings, and known limitations.
 
+## Verified Example Path
+
+The runnable reference is `examples/express-paid-api`. It demonstrates:
+
+- `GET /api/v1/agent-report` and `POST /api/v1/tools/wallet-analysis` paid with native SOL.
+- `GET /api/v1/premium/:productId`, `POST /api/v1/marketplace/:productId/purchase`, metered session settlements, and subscription renewals paid with SPL tokens in the Surfpool E2E suite.
+- `Payment-Receipt` parsing, transaction lookup by receipt reference, balance-delta checks, and app state transitions after settlement.
+- Replay checks for same-route reuse, route mismatch, amount mismatch, split-policy mismatch, idempotency conflict, expired sessions, and unit-limit failures.
+
+Use this example as the first implementation reference when the user asks for paid tool calls, metered sessions, replay protection, or settlement verification.
+
 ## Required Safety Checks
 
 Every paid route must show or log the exact recipient, currency, amount, network, and product being purchased before payment is signed. Every server must bind payment proof to the original request intent, reject stale nonces, and prevent proof reuse across routes or users.
@@ -52,6 +64,8 @@ Never tell the user that a route is production-ready until it has:
 - timeout and partial-failure handling
 - tests for wrong amount, wrong recipient, stale proof, and duplicate proof
 - clear environment separation for sandbox, devnet, and mainnet
+
+For persistent services, replace the example memory store with a durable `AtomicCommerceStore` adapter backed by Redis, Upstash, a database, or equivalent storage. The adapter must serialize `transaction()` writes for receipt claims, replay records, session reservations, and subscription period state.
 
 ## Templates
 
