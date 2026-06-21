@@ -1,5 +1,7 @@
 # Solana Agentic Commerce Skill
 
+[![verify](https://github.com/devvvenus/solana-agentic-commerce-skill/actions/workflows/verify.yml/badge.svg)](https://github.com/devvvenus/solana-agentic-commerce-skill/actions/workflows/verify.yml)
+
 AI-agent skill for building Solana-paid APIs, paid agent tool calls, stablecoin paywalls, marketplace splits, metered sessions, and x402/MPP-style commerce flows with Solana Pay Kit patterns.
 
 This submission targets the Superteam Brasil bounty: **Ship useful agent skills we can add to Solana AI Kit**.
