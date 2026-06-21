@@ -80,7 +80,7 @@ npm run example:install
 npm run verify
 ```
 
-`npm run verify` runs repository validation, TypeScript checking, the normal example suite, and `npm audit --audit-level=moderate`. The normal example suite does not require Surfpool and currently covers 5 files / 96 tests, including 17 route tests.
+`npm run verify` runs repository validation, TypeScript checking, the normal example suite, and `npm audit --audit-level=moderate`. The normal example suite does not require Surfpool and currently covers 5 files / 97 tests, including 17 route tests.
 
 For the full Surfpool local settlement E2E, start Surfpool in another terminal and run:
 
@@ -89,7 +89,7 @@ surfpool start --ci --offline --airdrop-amount 0
 npm run example:e2e
 ```
 
-`npm run example:e2e` currently covers 2 files / 13 tests when Surfpool is running: 6 settlement cases and 7 adversarial cases. The GitHub Actions workflow contains a pinned Surfpool `v1.3.1` E2E job that runs the settlement and adversarial suites against the local validator.
+`npm run example:e2e` currently covers 2 files / 14 tests when Surfpool is running: 6 settlement cases and 8 adversarial cases. The GitHub Actions workflow contains a pinned Surfpool `v1.3.1` E2E job that runs the settlement and adversarial suites against the local validator.
 
 ## Capability matrix
 
@@ -101,7 +101,7 @@ npm run example:e2e
 | `POST /api/v1/marketplace/:productId/purchase` | SPL token with seller, platform, and referrer recipients | `examples/express-paid-api/src/server.ts`, `examples/express-paid-api/src/catalog.ts` | Route coverage in `commerce-routes.test.ts`; Surfpool E2E checks exact seller, platform, and referrer token deltas from the accepted settlement. |
 | `POST /api/v1/sessions` and `POST /api/v1/sessions/:sessionId/settlements` | SPL token metered settlement | `examples/express-paid-api/src/server.ts`, `examples/express-paid-api/src/commerce-service.ts`, `examples/express-paid-api/src/commerce-store.ts` | Route and service coverage in `commerce-routes.test.ts`, `commerce-service.test.ts`, and `commerce-store.test.ts`; Surfpool E2E settles usage and verifies `usedUnits` increments once. |
 | `POST /api/v1/subscriptions/renewals` | SPL token renewal | `examples/express-paid-api/src/server.ts`, `examples/express-paid-api/src/commerce-service.ts`, `examples/express-paid-api/src/commerce-store.ts` | Route and service coverage in `commerce-routes.test.ts`, `commerce-service.test.ts`, and `commerce-store.test.ts`; Surfpool E2E activates the requested billing period after receipt-backed settlement. |
-| Replay and settlement abuse checks | Native SOL and SPL token | `examples/express-paid-api/src/server.ts`, `examples/express-paid-api/src/commerce-service.ts`, `examples/express-paid-api/src/commerce-store.ts` | `payment-security.e2e.test.ts` covers credential capture, same-route replay without double credit, different route, different amount, different split policy, idempotency conflict, and expired or over-limit settlement attempts. |
+| Replay and settlement abuse checks | Native SOL and SPL token | `examples/express-paid-api/src/server.ts`, `examples/express-paid-api/src/commerce-service.ts`, `examples/express-paid-api/src/commerce-store.ts` | `payment-security.e2e.test.ts` covers credential capture, same-route replay rejection, wallet-tool replay rejection, different route, different amount, different split policy, idempotency conflict, and expired or over-limit settlement attempts. |
 
 ## Working example
 
