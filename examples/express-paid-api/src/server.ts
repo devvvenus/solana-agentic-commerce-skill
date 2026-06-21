@@ -26,6 +26,7 @@ import {
 import {
   createMemoryCommerceStore,
   type AtomicCommerceStore,
+  type ReceiptClaimRecord,
 } from "./commerce-store.js";
 import {
   readPaymentContract,
@@ -46,6 +47,7 @@ type PaidOperation = {
   operationId: string;
   externalId: string;
   expiresAt?: string;
+  allowAcceptedReceiptRetry?: boolean;
 };
 
 type PaidGate = (
@@ -78,7 +80,7 @@ export function createServer(
   const commerceStore = dependencies.commerceStore ?? createMemoryCommerceStore();
   const paymentStore = dependencies.paymentStore ?? commerceStore;
   const rpc = dependencies.rpc ?? createRpcBalanceReader(requiredEnv(env, "SOLANA_RPC_URL"));
-  const paidGate = dependencies.paidGate ?? createMppPaidGate(paymentStore);
+  const paidGate = dependencies.paidGate ?? createMppPaidGate(paymentStore, commerceStore);
   let commerceContext: ReturnType<typeof createCommerceContext> | undefined;
 
   const app = express();
@@ -208,6 +210,7 @@ export function createServer(
           operationId: prepared.operationId,
           externalId: prepared.externalId,
           expiresAt: prepared.paymentTerms.expiresAt,
+          allowAcceptedReceiptRetry: true,
         },
       );
       next();
@@ -242,6 +245,7 @@ export function createServer(
           operationId: prepared.operationId,
           externalId: prepared.externalId,
           expiresAt: prepared.paymentTerms.expiresAt,
+          allowAcceptedReceiptRetry: true,
         },
       );
       next();
@@ -289,7 +293,10 @@ function createCommerceContext(
   return { catalog, service };
 }
 
-function createMppPaidGate(store: AtomicCommerceStore | Store.AtomicStore): PaidGate {
+function createMppPaidGate(
+  store: AtomicCommerceStore | Store.AtomicStore,
+  commerceStore: AtomicCommerceStore,
+): PaidGate {
   return (contract, operation) => {
     const mppx = Mppx.create({
       secretKey: contract.secretKey,
@@ -335,6 +342,7 @@ function createMppPaidGate(store: AtomicCommerceStore | Store.AtomicStore): Paid
       if (receipt.externalId !== undefined && receipt.externalId !== operation.externalId) {
         throw new Error("Payment receipt externalId mismatch");
       }
+      await claimAcceptedReceipt(commerceStore, operation, receipt.reference);
       req.paymentAcceptance = {
         receiptReference: receipt.reference,
         verifiedAt: receipt.timestamp,
@@ -342,6 +350,34 @@ function createMppPaidGate(store: AtomicCommerceStore | Store.AtomicStore): Paid
       next();
     };
   };
+}
+
+async function claimAcceptedReceipt(
+  store: AtomicCommerceStore,
+  operation: PaidOperation,
+  receiptReference: string,
+): Promise<void> {
+  await store.transaction((transaction) => {
+    const key = `receipt-claim:${encodeURIComponent(receiptReference)}` as const;
+    const existing = transaction.get(key);
+    if (existing !== null) {
+      if (existing.externalId !== operation.externalId) {
+        throw new CommerceError("RECEIPT_ALREADY_CLAIMED", "Receipt reference is already claimed by another operation");
+      }
+      if (!operation.allowAcceptedReceiptRetry) {
+        throw new CommerceError("RECEIPT_ALREADY_CLAIMED", "Receipt reference is already claimed");
+      }
+      return;
+    }
+    const claim: ReceiptClaimRecord = {
+      kind: "receipt-claim",
+      receiptReference,
+      operationId: operation.operationId,
+      externalId: operation.externalId,
+      claimedAt: new Date().toISOString(),
+    };
+    transaction.set(key, claim);
+  });
 }
 
 function requirePayment(paidGate: PaidGate): RequestHandler {

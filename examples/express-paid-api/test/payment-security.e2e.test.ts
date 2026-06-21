@@ -79,11 +79,45 @@ describe("paid Express payment security on Surfpool", () => {
 
     expect(afterPayment - before).toBe(amount);
     expect(afterReplay).toBe(afterPayment);
-    if (replay.status === 200) {
-      expect(Receipt.fromResponse(replay).reference).toBe(paid.receipt.reference);
-    } else {
-      expect(replay.status).not.toBe(200);
-    }
+    expect(replay.status).not.toBe(200);
+  }, 120_000);
+
+  it("rejects reusing Authorization on the same wallet tool request", async () => {
+    await assertRpcReady(rpcUrl);
+    const payer = await createSigner();
+    const recipient = await createSigner();
+    const inspectedWallet = await createSigner();
+    const amount = 25_000n;
+
+    await airdropAndWait(payer.address, 1_000_000_000n, rpcUrl);
+    await airdropAndWait(recipient.address, 1_000_000n, rpcUrl);
+    await airdropAndWait(inspectedWallet.address, 1_234_567n, rpcUrl);
+    const before = await getLamportBalance(recipient.address, rpcUrl);
+    const baseUrl = await serve(nativeEnv(recipient.address, amount));
+    const target = `${baseUrl}/api/v1/tools/wallet-analysis`;
+
+    const paid = await payAndCaptureAuthorization(payer, target, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address: inspectedWallet.address }),
+    });
+    await expectConfirmedReceiptTransaction(paid.receipt);
+    const afterPayment = await waitForLamportBalanceAtLeast(recipient.address, before + amount, rpcUrl);
+
+    const replay = await fetch(target, {
+      method: "POST",
+      headers: {
+        authorization: paid.authorization,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ address: inspectedWallet.address }),
+    });
+    const body = await optionalJson(replay);
+    await delay(1_000);
+
+    expect(replay.status).not.toBe(200);
+    expect(body).not.toMatchObject({ ok: true, address: inspectedWallet.address });
+    expect(await getLamportBalance(recipient.address, rpcUrl)).toBe(afterPayment);
   }, 120_000);
 
   it("rejects reusing Authorization against a different route", async () => {

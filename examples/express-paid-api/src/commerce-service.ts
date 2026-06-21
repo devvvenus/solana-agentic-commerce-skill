@@ -340,9 +340,31 @@ export function createCommerceService(options: ServiceOptions) {
       const externalId = `subscription:${normalized.accountId}:${normalized.planId}:${normalized.period}:renewal:${normalized.idempotencyKey}`;
       const paymentTerms = operationTerms(normalized.plan.paymentTerms, normalized.plan.priceBaseUnits, externalId, operationExpiresAt);
       const key = renewalKey(normalized.accountId, normalized.planId, normalized.period);
+      const record: SubscriptionPeriodRecord = {
+        kind: "subscription-period",
+        subscriptionId: `${normalized.accountId}:${normalized.planId}`,
+        accountId: normalized.accountId,
+        planId: normalized.planId,
+        period: normalized.period,
+        periodStart: boundaries.periodStart,
+        periodEnd: boundaries.periodEnd,
+        maxUnits: "0",
+        usedUnits: "0",
+        idempotencyKey: normalized.idempotencyKey,
+        status: "pending",
+        operationExpiresAt,
+        paymentTerms: paymentTerms as unknown as JsonObject,
+      };
       const outcome = await options.store.update(key, (current) => {
         if (current !== null) {
           assertSubscriptionRecord(current);
+          const currentExpiresAt = parseStoredTimestamp(
+            requiredStored(current.operationExpiresAt, "renewal operationExpiresAt"),
+            "renewal operationExpiresAt",
+          );
+          if (current.status === "pending" && preparedAt.getTime() > currentExpiresAt) {
+            return { op: "set", value: record, result: success(renewalView(record)) };
+          }
           if (current.idempotencyKey === normalized.idempotencyKey) return { op: "noop", result: success(renewalView(current)) };
           return {
             op: "noop",
@@ -351,21 +373,6 @@ export function createCommerceService(options: ServiceOptions) {
               : "Renewal idempotency conflict"),
           };
         }
-        const record: SubscriptionPeriodRecord = {
-          kind: "subscription-period",
-          subscriptionId: `${normalized.accountId}:${normalized.planId}`,
-          accountId: normalized.accountId,
-          planId: normalized.planId,
-          period: normalized.period,
-          periodStart: boundaries.periodStart,
-          periodEnd: boundaries.periodEnd,
-          maxUnits: "0",
-          usedUnits: "0",
-          idempotencyKey: normalized.idempotencyKey,
-          status: "pending",
-          operationExpiresAt,
-          paymentTerms: paymentTerms as unknown as JsonObject,
-        };
         return { op: "set", value: record, result: success(renewalView(record)) };
       });
       return unwrap(outcome);

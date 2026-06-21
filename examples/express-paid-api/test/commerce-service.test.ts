@@ -450,6 +450,44 @@ describe("verified payment completion and receipt claims", () => {
 });
 
 describe("subscription recovery", () => {
+  it("allows a new renewal attempt after the prior pending operation expires", async () => {
+    const currentTime = clock();
+    const catalog = makeCatalog({
+      subscriptionPlans: [{
+        id: "monthly-api",
+        priceBaseUnits: "12000000",
+        periodDurationMonths: 1,
+        paymentExpirySeconds: 2,
+        description: "Monthly API access",
+        recipient: seller,
+      }],
+    });
+    const store = createMemoryCommerceStore();
+    const service = makeService({ catalog, store, currentTime });
+
+    const first = await service.prepareRenewal({
+      accountId: "acct",
+      planId: "monthly-api",
+      period: "2028-02",
+      idempotencyKey: "first",
+    });
+    currentTime.set("2028-02-29T12:00:03.000Z");
+    const second = await service.prepareRenewal({
+      accountId: "acct",
+      planId: "monthly-api",
+      period: "2028-02",
+      idempotencyKey: "second",
+    });
+
+    expect(second.operationId).toBe("second");
+    expect(second.externalId).not.toBe(first.externalId);
+    expect(Date.parse(second.paymentTerms.expiresAt!)).toBeGreaterThan(Date.parse(first.paymentTerms.expiresAt!));
+    expect(await store.get("subscription:acct:monthly-api:2028-02")).toMatchObject({
+      idempotencyKey: "second",
+      status: "pending",
+    });
+  });
+
   it("persists public terms, completes after restart, and globally claims the receipt", async () => {
     const store = createMemoryCommerceStore();
     const prepared = await makeService({ store }).prepareRenewal({ accountId: "acct", planId: "monthly-api", period: "2028-02", idempotencyKey: "renew" });
